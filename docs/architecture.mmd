@@ -1,0 +1,67 @@
+flowchart TD
+    subgraph UI_API["Interface Layer"]
+        UI["Gradio Blocks Dashboard (/ui)"]
+        API["FastAPI REST Endpoints (/api)"]
+        SWAGGER["OpenAPI / Swagger (/api/docs)"]
+    end
+
+    subgraph WORKFLOW["Controlled 9-Step Agent Loop"]
+        S1["1. INVESTIGATE<br/>(Gather DB Evidence, Check Stale/Contradictions)"]
+        S2["2. PLAN<br/>(Evaluate Replenishment & Alternatives)"]
+        S3["3. CHECK CONSTRAINTS<br/>(Budget, Storage, Capacity, MOQ, Rules)"]
+        S4["4. PROPOSE<br/>(Generate Idempotent Action Proposal)"]
+        S5["5. APPROVE<br/>(Threshold Check & SHA-256 Fingerprint)"]
+        S6["6. EXECUTE<br/>(Atomic DB Transaction & Mutating Tools)"]
+        S7["7. READ BACK<br/>(Fetch Fresh State from Persisted DB)"]
+        S8["8. VALIDATE<br/>(Independent Policy & State Checks)"]
+        S9["9. COMPLETE / RECOVER / ESCALATE<br/>(Bounded Retries or Safe Escalation)"]
+
+        S1 --> S2 --> S3 --> S4 --> S5
+        S5 -- "Approved / Unconstrained" --> S6
+        S5 -- "Pending / Rejected" --> S9
+        S6 --> S7 --> S8
+        S8 -- "Valid" --> S9
+        S8 -- "Failed" --> S9
+    end
+
+    subgraph ENGINE["Deterministic Decision Core"]
+        DE["Decision Engine<br/>(Pure Deterministic Formulas)"]
+        CONSTR["Constraint Evaluator<br/>(Hard & Soft Rules)"]
+        APP_SVC["Approval Service<br/>(Fingerprint Verification)"]
+    end
+
+    subgraph EXPLAINER["Reasoning & Explanations"]
+        LLM_FALLBACK["Deterministic Explainer<br/>(Zero-Key Fallback)"]
+        LLM_OPT["Optional LLM<br/>(Gemini / OpenAI Compatible)"]
+    end
+
+    subgraph TOOLS["Tool Registry (ProcurementTools)"]
+        RO_TOOLS["Read-Only Tools<br/>- Product, Inventory, Forecast<br/>- Sales, Supplier, Budget, Storage"]
+        MUT_TOOLS["Mutating Tools<br/>- PO Service, Approval, Audit Log"]
+    end
+
+    subgraph PERSISTENCE["Data Layer (PostgreSQL / SQLite Fallback)"]
+        DB[(Procurement DB)]
+        T_PROD[Products & Nodes]
+        T_INV[Inventory & Forecasts]
+        T_SUP[Suppliers & Offerings]
+        T_PO[Purchase Orders]
+        T_AUDIT[Audit Logs & Runs]
+        DB --- T_PROD
+        DB --- T_INV
+        DB --- T_SUP
+        DB --- T_PO
+        DB --- T_AUDIT
+    end
+
+    UI_API --> WORKFLOW
+    S1 --> RO_TOOLS
+    S2 --> DE
+    S3 --> CONSTR
+    S5 --> APP_SVC
+    S6 --> MUT_TOOLS
+    S7 --> RO_TOOLS
+    S2 -.-> LLM_FALLBACK
+    S2 -.-> LLM_OPT
+    RO_TOOLS --> DB
+    MUT_TOOLS --> DB
