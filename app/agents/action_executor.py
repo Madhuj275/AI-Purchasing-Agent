@@ -62,7 +62,7 @@ def build_proposal(run_id: str, inv: InvestigationReport, decision: DecisionReco
             payload = {
                 "kind": "split_and_supplement",
                 "original_po_id": inv.event.get("po_id"),
-                "confirmed_qty": inv.event.get("confirmed_qty", 250),
+                "confirmed_qty": inv.event.get("confirmed_qty", 0),
                 "sku": sku,
                 "node_id": node_id,
                 "supplier_id": decision.supplier_id,
@@ -98,7 +98,7 @@ def build_proposal(run_id: str, inv: InvestigationReport, decision: DecisionReco
         payload = {
             "kind": "confirm_reduce",
             "original_po_id": inv.event.get("po_id"),
-            "confirmed_qty": inv.event.get("confirmed_qty", 250),
+            "confirmed_qty": inv.event.get("confirmed_qty", 0),
         }
         key = idempotency_key("confirm", inv.event.get("po_id"), str(inv.event.get("confirmed_qty")))
         return ActionProposal(

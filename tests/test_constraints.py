@@ -109,6 +109,24 @@ def test_llm_fallback_mode(session):
     assert "deterministic fallback" in result.explanation.lower() or result.reasoning_mode == "deterministic"
 
 
+def test_llm_request_failure_is_reported_with_deterministic_fallback(session):
+    class FailingGeminiAgent:
+        provider = "gemini"
+
+        def decide(self, tools, investigation, baseline):
+            raise RuntimeError("Gemini request failed")
+
+    agent = PurchasingAgent(session)
+    agent.reset_fixture("s1", "appropriate")
+    agent.decision_agent = FailingGeminiAgent()
+
+    result = agent.run("s1", "appropriate", execute=False)
+
+    assert result.reasoning_mode == "deterministic-fallback"
+    assert "gemini request failed" in result.explanation.lower()
+    assert "RuntimeError" in result.explanation
+
+
 def test_langchain_decision_recomputes_cost_and_checks_constraints(session):
     PurchasingAgent(session).reset_fixture("s1", "appropriate")
     tools = ProcurementTools(session)

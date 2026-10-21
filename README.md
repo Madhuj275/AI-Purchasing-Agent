@@ -68,10 +68,10 @@ For detailed diagrams and architectural specifications, see [docs/architecture.m
    - Dynamically checks warehouse inventory, pipeline POs, demand, budget, and storage.
    - Adjusts excessive or insufficient quantities, rejects redundant buys when incoming stock covers demand, or triggers approval when cost $\ge \$500.00$.
 
-2. **Scenario 2 — Supplier Shortage (SKU: RICE-5KG, PO-S2-001)**
-   - Supplier confirms only 250 of 500 ordered units.
-   - Persists confirmation, evaluates remaining 250-unit deficit, and checks on-hand buffer.
-   - Splits orders and places a supplementary PO with alternate supplier (`SUP-ALTSOURCE`) if needed, ensuring strict idempotency to prevent duplicate coverage.
+2. **Scenario 2 — Rice Supplier Recommendation (SKU: RICE-5KG)**
+   - Compares 300 units of forecast demand over 10 days against an inventory position of 30, with no incoming supply or safety stock.
+   - Rounds the 270-unit requirement using supplier MOQ and order multiples, then selects the lowest-cost feasible supplier.
+   - Explicitly reports the supplier name, ordered quantity, unit price, total cost, lead time, and why infeasible suppliers were rejected.
 
 3. **Scenario 3 — Demand Change (SKU: BREAD-WHT)**
    - Evaluates demand surge against baseline forecast.
@@ -125,7 +125,13 @@ Copy-Item .env.example .env
    Use the complete URL supplied by Neon, including any query parameters. The project accepts `postgres://` and `postgresql://` URLs; database credentials are read from `DATABASE_URL`.
 3. Install dependencies and start the app as usual. On startup, SQLAlchemy creates missing tables and seeds the demo catalog if the database is empty.
 
-The app enables connection health checks for pooled PostgreSQL connections. It does not print the connection URL. Scenario/database reset endpoints, which drop tables, are blocked for non-SQLite databases by default; use SQLite for demo resets. `ALLOW_DATABASE_RESET=true` explicitly enables destructive resets and should only be used with a disposable database.
+The app enables connection health checks for pooled PostgreSQL connections. It does not print the connection URL. Scenario fixture resets update the selected demo records in place; they do not drop or recreate tables. They can still overwrite the demo records used by that fixture (for example, Scenario 2's Rice supplier offers and inventory at `NODE-NORTH`), so do not use fixture resets against business records that must remain unchanged.
+
+The separate `reset_db` utility is destructive: it drops and recreates tables. It remains blocked for non-SQLite databases unless `ALLOW_DATABASE_RESET=true`. Fixture resets do not require that setting.
+
+#### Run demos with Neon
+
+Neon works with the in-place fixture reset. Keep `ALLOW_DATABASE_RESET=false`; the dashboard's **Reset fixture** button does not need permission to drop tables. The fixture updates only the selected scenario's demo records and leaves unrelated tables and records in place. Never paste database credentials into source control or chat.
 
 ---
 
@@ -158,7 +164,7 @@ To run individual scenario test suites:
 # Scenario 1 (Recommendation Review)
 .\.venv\Scripts\pytest.exe tests/test_scenario_1.py -v
 
-# Scenario 2 (Supplier Shortage)
+# Scenario 2 (Rice Supplier Recommendation)
 .\.venv\Scripts\pytest.exe tests/test_scenario_2.py -v
 
 # Scenario 3 (Demand Surge)

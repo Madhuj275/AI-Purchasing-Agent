@@ -228,132 +228,123 @@ def plan(tools: ProcurementTools, inv: InvestigationReport) -> DecisionRecord:
         )
 
     if scenario == "s2":
-        po_id = inv.event.get("po_id")
-        po = next((p for p in inv.purchase_orders if p["po_id"] == po_id), None)
-        confirmed = int(inv.event.get("confirmed_qty", 250))
-        ordered = int(inv.event.get("ordered_qty", 500))
-        shortage = max(0, ordered - confirmed)
-        if po is None:
-            return DecisionRecord(
-                action="investigate",
-                recommended_qty=0,
-                confidence="low",
-                explanation="Original purchase order was not found.",
-                calculation=calc,
-            )
-        if po["status"] in {"cancelled", "rejected"}:
-            return DecisionRecord(
-                action="escalate",
-                recommended_qty=0,
-                confidence="medium",
-                explanation=f"PO {po_id} status={po['status']} is not safely modifiable.",
-                calculation=calc,
-            )
-        if po["received_qty"] > 0:
-            return DecisionRecord(
-                action="escalate",
-                recommended_qty=shortage,
-                confidence="medium",
-                explanation=(
-                    f"PO {po_id} is already partially received ({po['received_qty']}). "
-                    "The mock confirmation policy will not rewrite ordered quantity; human review is required."
-                ),
-                calculation=calc,
-                uncertainty=["partial_receipt"],
-            )
-        # Recalc need after treating original remaining as unconfirmed/reduced
         inventory = inv.inventory or {"on_hand": 0, "reserved": 0, "available": 0}
-        available = inventory.get("available", 0)
-        # After confirmation, incoming from this PO becomes confirmed qty remaining
-        other_incoming = 0
-        for p in inv.purchase_orders:
-            if p["po_id"] == po_id:
-                continue
-            if p.get("confirmed_incoming") and p.get("status") not in {"cancelled", "rejected", "closed"}:
-                other_incoming += max(0, p["ordered_qty"] - p.get("received_qty", 0))
         daily = inv.forecast["daily_demand"] if inv.forecast else None
-        need_calc = calculate_replenishment(
+        forecast_horizon = int((inv.forecast or {}).get("horizon_days") or 0)
+        incoming_confirmed = 0
+        incoming_unconfirmed = 0
+        for po in inv.purchase_orders:
+            if po["status"] in {"cancelled", "rejected", "closed"}:
+                continue
+            remaining = max(0, po["ordered_qty"] - po.get("received_qty", 0))
+            if po.get("confirmed_incoming"):
+                incoming_confirmed += remaining
+            else:
+                incoming_unconfirmed += remaining
+        calculation = calculate_replenishment(
             sku=inv.event["sku"],
             node_id=inv.event["node_id"],
             on_hand=inventory.get("on_hand", 0),
             reserved=inventory.get("reserved", 0),
-            incoming_confirmed=confirmed + other_incoming,
-            incoming_unconfirmed=0,
+            incoming_confirmed=incoming_confirmed,
+            incoming_unconfirmed=incoming_unconfirmed,
             daily_demand=daily,
-            lead_time_days=primary["lead_time_days"],
-            moq=primary["min_order_qty"],
-            order_multiple=primary["order_multiple"],
+            lead_time_days=0,
+            review_horizon_days=forecast_horizon,
+            safety_stock_days=0,
+            moq=1,
+            order_multiple=1,
             missing=list(inv.missing),
             stale=list(inv.stale),
         )
-        remaining_need = need_calc.recommended_raw
-        risk = stockout_estimate(available, confirmed + other_incoming, daily)
-        # Inventory covers
-        if remaining_need == 0:
-            opt = _option("reduce", f"Reduce original PO to {confirmed}; inventory covers shortage", "modify", 0, None, inv)
+        required_qty = calculation.recommended_raw
+        if required_qty == 0:
             return DecisionRecord(
-                action="modify",
+                action="no_action",
                 recommended_qty=0,
-                supplier_id=po["supplier_id"],
                 confidence="high",
                 explanation=(
-                    f"Supplier can fulfil {confirmed} of {ordered}. Remaining operational need is 0 "
-                    f"because inventory position after confirmation is {need_calc.inventory_position} vs target {need_calc.target_stock}."
+                    f"No purchase is needed: inventory position {calculation.inventory_position} "
+                    f"covers the {calculation.target_stock}-unit target."
                 ),
-                calculation=need_calc,
-                alternatives=[opt],
-                selected_option_id="reduce",
-                requires_approval=False,
+                calculation=calculation,
             )
-        alts: list[AlternativeOption] = []
-        alts.append(_option("reduce_only", f"Accept {confirmed} and leave shortage {remaining_need}", "defer", 0, None, inv))
-        for s in suppliers:
-            if s["supplier_id"] == po["supplier_id"]:
-                continue
-            qty = round_qty(shortage, s)
-            alts.append(_option(f"alt-{s['supplier_id']}", f"Cover shortage {qty} with {s['supplier_id']} (LT {s['lead_time_days']}d, ${s['unit_price']})", "alternative_supplier", qty, s, inv))
-        selected = next((a for a in alts if a.action == "alternative_supplier" and a.feasible), None)
-        if selected is None and risk.get("at_risk"):
+
+        supplier_options: list[tuple[dict, AlternativeOption]] = []
+        for supplier in suppliers:
+            qty = round_qty(required_qty, supplier)
+            option = _option(
+                f"supplier-{supplier['supplier_id']}",
+                (
+                    f"{supplier['name']} ({supplier['supplier_id']}): order {qty} units "
+                    f"at ${supplier['unit_price']:.2f}/unit; lead time {supplier['lead_time_days']} days"
+                ),
+                "alternative_supplier",
+                qty,
+                supplier,
+                inv,
+            )
+            supplier_options.append((supplier, option))
+
+        feasible_options = [
+            (supplier, option)
+            for supplier, option in supplier_options
+            if option.feasible
+        ]
+        if not feasible_options:
             return DecisionRecord(
                 action="escalate",
-                recommended_qty=remaining_need,
-                confidence="medium",
+                recommended_qty=required_qty,
+                confidence="low",
                 explanation=(
-                    f"Supplier confirmed {confirmed}/{ordered}. Shortage {remaining_need} remains, "
-                    f"stockout risk in {risk.get('days_of_cover')} days, and no feasible alternate supplier exists."
+                    f"Inventory position is {calculation.inventory_position} against a "
+                    f"{calculation.target_stock}-unit target, leaving {required_qty} units needed. "
+                    "No supplier can meet that quantity within its MOQ, capacity, budget, and storage constraints."
                 ),
-                calculation=need_calc,
-                alternatives=alts,
+                calculation=calculation,
+                alternatives=[option for _, option in supplier_options],
                 requires_approval=True,
-                uncertainty=["projected_stockout"],
+                uncertainty=["no_feasible_supplier"],
             )
-        if selected is None:
-            return DecisionRecord(
-                action="escalate",
-                recommended_qty=remaining_need,
-                confidence="medium",
-                explanation=f"Shortage of {remaining_need} cannot be covered by a feasible supplier option.",
-                calculation=need_calc,
-                alternatives=alts,
-                requires_approval=True,
-            )
-        price = next(s["unit_price"] for s in suppliers if s["supplier_id"] == selected.supplier_id)
-        return DecisionRecord(
-            action="split_order",
-            recommended_qty=selected.quantity,
-            supplier_id=selected.supplier_id,
-            unit_price=price,
-            total_cost=selected.cost,
-            confidence="medium",
-            explanation=(
-                f"Original PO will be confirmed at {confirmed}. Remaining need {remaining_need} is sourced from "
-                f"{selected.supplier_id}. Duplicate coverage of the confirmed {confirmed} units is avoided."
+
+        selected_supplier, selected = min(
+            feasible_options,
+            key=lambda pair: (
+                pair[1].cost if pair[1].cost is not None else float("inf"),
+                pair[0]["lead_time_days"],
+                pair[0]["supplier_id"],
             ),
-            calculation=need_calc,
+        )
+        selected_cost = selected.cost or 0.0
+        rejected = [
+            f"{supplier['name']} is infeasible: {', '.join(option.reasons)}."
+            for supplier, option in supplier_options
+            if not option.feasible
+        ]
+        explanation = (
+            f"BEST SUPPLIER: {selected_supplier['name']} ({selected_supplier['supplier_id']}). "
+            f"Inventory position is {calculation.inventory_position}; target stock is "
+            f"{calculation.target_stock} units over {forecast_horizon} days, so {required_qty} more "
+            f"units are needed. Order {selected.quantity} units at ${selected_supplier['unit_price']:.2f} "
+            f"each (${selected_cost:.2f} total), with a {selected_supplier['lead_time_days']}-day lead time. "
+            "This is the lowest-cost feasible single-supplier option."
+        )
+        if rejected:
+            explanation += " " + " ".join(rejected)
+
+        return DecisionRecord(
+            action="alternative_supplier",
+            recommended_qty=selected.quantity,
+            supplier_id=selected_supplier["supplier_id"],
+            unit_price=selected_supplier["unit_price"],
+            total_cost=selected_cost,
+            confidence="high",
+            explanation=explanation,
+            calculation=calculation,
             constraints=selected.constraints,
-            alternatives=alts,
+            alternatives=[option for _, option in supplier_options],
             selected_option_id=selected.option_id,
-            requires_approval=tools.approvals.requires_approval(selected.cost or 0),
+            requires_approval=tools.approvals.requires_approval(selected_cost),
         )
 
     if scenario == "s3":

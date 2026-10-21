@@ -9,23 +9,22 @@ from sqlalchemy.orm import Session
 
 from app.agents.purchasing_agent import PurchasingAgent
 from app.database import get_session_factory
-from app.models.entities import ActionRecord, AgentRun, AuditLog, HumanApproval
-from app.seed.demo_data import SCENARIO_EVENTS, seed_database
-from app.database import reset_db
+from app.models.entities import ActionRecord, AgentRun, AuditLog, HumanApproval, Product
+from app.seed.demo_data import SCENARIO_EVENTS, apply_fixture, seed_database
 from app.services.approval_service import ApprovalService
 from app.tools.registry import ProcurementTools
 
 SCENARIO_CHOICES = [
     ("S1 — Purchase Recommendation Review", "s1"),
-    ("S2 — Supplier Cannot Fulfil", "s2"),
+    ("S2 — Rice Supplier Recommendation", "s2"),
     ("S3 — Demand / Forecast Changed", "s3"),
     ("S4 — Purchasing Constraint", "s4"),
 ]
 
 FIXTURES = {
     "s1": ["default", "appropriate", "excessive", "sufficient", "insufficient", "missing_forecast", "stale_forecast", "contradiction", "budget", "storage", "moq", "cancelled_incoming"],
-    "s2": ["default", "alt_supplier", "inventory_covers", "alt_expensive", "no_supplier", "stockout_escalate", "partially_received", "cancelled", "repeat_notification"],
-    "s3": ["default", "increase_justified", "po_sufficient", "short_window", "stale_forecast", "missing_forecast", "too_late", "constraint"],
+    "s2": ["default", "alt_supplier", "inventory_covers", "stockout_escalate"],
+    "s3": ["default", "increase_justified", "po_sufficient",  "too_late", "constraint"],
     "s4": ["default", "budget", "storage", "moq", "capacity", "multi", "feasible_alt", "approval"],
 }
 
@@ -153,8 +152,12 @@ def _table_audit():
 def reset_all():
     db = _session()
     try:
-        reset_db()
-        seed_database(db)
+        if db.query(Product).count() == 0:
+            seed_database(db)
+        else:
+            for scenario_id in SCENARIO_EVENTS:
+                apply_fixture(db, scenario_id, "default")
+            db.commit()
         return _overview_md(), *_refresh_tables()
     finally:
         db.close()
@@ -186,9 +189,9 @@ def run_workflow(scenario_label: str, fixture_key: str, execute: bool, auto_appr
         result = agent.run(
             scenario_id,
             fixture_key=fixture_key,
-            execute=execute,
-            auto_approve=auto_approve,
-            simulate_failure=fail,
+            # execute=execute,
+            # auto_approve=auto_approve,
+            # simulate_failure=fail,
         )
         inv = result.investigation
         dec = result.decision
@@ -232,6 +235,7 @@ def run_workflow(scenario_label: str, fixture_key: str, execute: bool, auto_appr
             val = f"**Outcome: {result.validation.outcome}**\n\n{checks}\n\nRecovery: {result.validation.recovery or 'n/a'}"
         decision_md = f"""
 ## Decision
+- **Best supplier:** {next((s['name'] for s in inv.suppliers if s['supplier_id'] == dec.supplier_id), dec.supplier_id or 'None')} (`{dec.supplier_id or 'n/a'}`)
 - Action: **{dec.action}**
 - Quantity: **{dec.recommended_qty}**
 - Supplier: `{dec.supplier_id}`
@@ -342,10 +346,10 @@ The LLM never owns quantities, budget checks, or approvals. Without an API key t
                 with gr.Row():
                     scenario = gr.Dropdown(choices=[c[0] for c in SCENARIO_CHOICES], value=SCENARIO_CHOICES[0][0], label="Scenario")
                     fixture = gr.Dropdown(choices=FIXTURES["s1"], value="default", label="Fixture")
-                with gr.Row():
-                    execute = gr.Checkbox(label="Execute eligible action", value=False)
-                    auto_approve = gr.Checkbox(label="Auto-approve (demo)", value=False)
-                    failure = gr.Dropdown(choices=["none", "storage_race", "persist_fail"], value="none", label="Injected failure")
+                #with gr.Row():
+                    # execute = gr.Checkbox(label="Execute eligible action", value=False)
+                    # auto_approve = gr.Checkbox(label="Auto-approve (demo)", value=False)
+                    #failure = gr.Dropdown(choices=["none", "storage_race", "persist_fail"], value="none", label="Injected failure")
                 with gr.Row():
                     btn_reset = gr.Button("Reset fixture")
                     btn_run = gr.Button("Investigate / plan / run", variant="primary")
@@ -406,7 +410,7 @@ API docs: `/api/docs` · Health: `/api/health`
                 )
 
         outputs_main = [run_header, evidence, calc, constraints, alts, decision, validation, timeline, overview, inv_df, po_df, sup_df, fc_df, bud_df, st_df, approval_table, aud_df]
-        btn_run.click(run_workflow, inputs=[scenario, fixture, execute, auto_approve, failure], outputs=outputs_main)
+        btn_run.click(run_workflow, inputs=[scenario, fixture], outputs=outputs_main)
         btn_reset.click(lambda s, f: reset_fixture(s, f), inputs=[scenario, fixture], outputs=[reset_msg, overview, inv_df, po_df, sup_df, fc_df, bud_df, st_df, approval_table, aud_df])
         refresh.click(lambda: (_overview_md(), *_refresh_tables()), outputs=[overview, inv_df, po_df, sup_df, fc_df, bud_df, st_df, approval_table, aud_df])
         btn_data.click(lambda: _refresh_tables(), outputs=[inv_df, po_df, sup_df, fc_df, bud_df, st_df, approval_table, aud_df])

@@ -170,7 +170,9 @@ class LangChainPurchasingAgent:
                 model=model or "gpt-4o-mini",
                 base_url=base_url or None,
                 temperature=0,
-                timeout=20,
+                timeout=90,
+                max_retries=1,
+                verbose=True,
             )
         elif provider == "gemini":
             self.model = ChatGoogleGenerativeAI(
@@ -225,7 +227,7 @@ class LangChainPurchasingAgent:
         executor = AgentExecutor(
             agent=agent,
             tools=[check_candidate],
-            max_iterations=4,
+            max_iterations=2,
             verbose=False,
         )
         response = executor.invoke(

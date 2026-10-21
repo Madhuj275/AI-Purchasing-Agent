@@ -18,7 +18,6 @@ from app.seed.demo_data import SCENARIO_EVENTS, apply_fixture, seed_database
 from app.services.approval_service import ApprovalService
 from app.tools.registry import ProcurementTools
 from app.utils.ids import utcnow
-from app.database import reset_db
 
 router = APIRouter()
 
@@ -35,6 +34,8 @@ def health() -> dict:
         "status": "ok",
         "database": settings.database_url.split("://", 1)[0],
         "llm_mode": llm,
+        "llm_provider": settings.llm_provider,
+        "llm_configured": settings.llm_provider != "none" and bool(settings.llm_api_key),
         "time": utcnow().isoformat(),
     }
 
@@ -147,12 +148,12 @@ def run_scenario(scenario_id: str, body: ScenarioRunRequest, db: Session = Depen
 def reset_scenario(scenario_id: str, fixture_key: str = "default", db: Session = Depends(get_db)) -> dict:
     if scenario_id not in SCENARIO_EVENTS and scenario_id != "all":
         raise HTTPException(404, "Unknown scenario")
-    try:
-        reset_db()
-    except RuntimeError as exc:
-        raise HTTPException(409, str(exc)) from exc
-    seed_database(db, scenario_id=None)
-    if scenario_id != "all":
+    if db.query(Product).count() == 0:
+        seed_database(db)
+    if scenario_id == "all":
+        for scenario in SCENARIO_EVENTS:
+            apply_fixture(db, scenario, "default")
+    else:
         apply_fixture(db, scenario_id, fixture_key)
     db.commit()
     return {"ok": True, "scenario_id": scenario_id, "fixture_key": fixture_key}

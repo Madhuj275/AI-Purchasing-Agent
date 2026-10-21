@@ -44,13 +44,10 @@ SCENARIO_EVENTS = {
     },
     "s2": {
         "scenario_id": "s2",
-        "name": "Supplier Cannot Fulfil the Purchase",
+        "name": "Rice Supplier Recommendation",
         "sku": RICE,
         "node_id": NORTH,
-        "po_id": "PO-S2-001",
-        "ordered_qty": 500,
-        "confirmed_qty": 250,
-        "event": "Existing PO-S2-001 requested 500 units of RICE-5KG; supplier confirms only 250 units.",
+        "event": "Choose the best supplier for the 10-day RICE-5KG forecast.",
     },
     "s3": {
         "scenario_id": "s3",
@@ -94,8 +91,9 @@ def _base_catalog(session: Session) -> None:
         [
             SupplierProduct(supplier_id=SUP_A, sku=MILK, unit_price=1.10, lead_time_days=3, min_order_qty=100, order_multiple=50, capacity=5000, available=True),
             SupplierProduct(supplier_id=SUP_E, sku=MILK, unit_price=1.25, lead_time_days=5, min_order_qty=200, order_multiple=100, capacity=2000, available=True),
-            SupplierProduct(supplier_id=SUP_B, sku=RICE, unit_price=8.00, lead_time_days=4, min_order_qty=100, order_multiple=50, capacity=250, available=True),
-            SupplierProduct(supplier_id=SUP_E, sku=RICE, unit_price=8.80, lead_time_days=7, min_order_qty=50, order_multiple=50, capacity=2000, available=True),
+            SupplierProduct(supplier_id=SUP_A, sku=RICE, unit_price=100, lead_time_days=2, min_order_qty=500, order_multiple=50, capacity=700, available=True),
+            SupplierProduct(supplier_id=SUP_B, sku=RICE, unit_price=150, lead_time_days=1, min_order_qty=100, order_multiple=50, capacity=700, available=True),
+            SupplierProduct(supplier_id=SUP_E, sku=RICE, unit_price=80, lead_time_days=8, min_order_qty=10, order_multiple=50, capacity=200, available=True),
             SupplierProduct(supplier_id=SUP_C, sku=BREAD, unit_price=1.60, lead_time_days=1, min_order_qty=50, order_multiple=25, capacity=3000, available=True),
             SupplierProduct(supplier_id=SUP_E, sku=BREAD, unit_price=1.90, lead_time_days=3, min_order_qty=100, order_multiple=50, capacity=1500, available=True),
             SupplierProduct(supplier_id=SUP_D, sku=OIL, unit_price=3.20, lead_time_days=5, min_order_qty=200, order_multiple=50, capacity=80, available=True),
@@ -141,7 +139,7 @@ def _base_catalog(session: Session) -> None:
         [
             DemandForecast(sku=MILK, node_id=NORTH, horizon_days=7, forecast_quantity=1120, forecast_timestamp=now, daily_demand=160, source="planning"),
             DemandForecast(sku=MILK, node_id=SOUTH, horizon_days=7, forecast_quantity=700, forecast_timestamp=now, daily_demand=100, source="planning"),
-            DemandForecast(sku=RICE, node_id=NORTH, horizon_days=14, forecast_quantity=700, forecast_timestamp=now, daily_demand=50, source="planning"),
+            DemandForecast(sku=RICE, node_id=NORTH, horizon_days=10, forecast_quantity=300, forecast_timestamp=now, daily_demand=30, source="planning"),
             DemandForecast(sku=BREAD, node_id=NORTH, horizon_days=7, forecast_quantity=350, forecast_timestamp=now, daily_demand=50, source="planning"),
             DemandForecast(sku=OIL, node_id=NORTH, horizon_days=14, forecast_quantity=280, forecast_timestamp=now, daily_demand=20, source="planning"),
             DemandForecast(sku=WATER, node_id=NORTH, horizon_days=7, forecast_quantity=700, forecast_timestamp=now, daily_demand=100, source="planning"),
@@ -178,24 +176,6 @@ def _base_catalog(session: Session) -> None:
                 notes="Seed open beverage PO",
             ),
             PurchaseOrder(
-                po_id="PO-S2-001",
-                supplier_id=SUP_B,
-                sku=RICE,
-                node_id=NORTH,
-                ordered_qty=500,
-                received_qty=0,
-                confirmed_qty=None,
-                status="open",
-                unit_price=8.00,
-                confirmed_incoming=True,
-                expected_arrival=now + timedelta(days=4),
-                parent_po_id=None,
-                idempotency_key="seed-s2-primary",
-                created_at=now,
-                updated_at=now,
-                notes="Primary rice PO awaiting supplier confirmation",
-            ),
-            PurchaseOrder(
                 po_id="PO-S3-001",
                 supplier_id=SUP_C,
                 sku=BREAD,
@@ -221,6 +201,32 @@ def apply_fixture(session: Session, scenario_id: str, fixture_key: str) -> None:
     """Mutate seeded catalog into a reproducible scenario fixture."""
     now = utcnow()
     key = f"{scenario_id}:{fixture_key}"
+
+    if scenario_id == "s2":
+        _set_inv(session, RICE, NORTH, on_hand=40, reserved=10)
+        _set_forecast(session, RICE, NORTH, daily=30, qty=300, ts=now)
+        _set_budget(session, NORTH, "grocery", remaining=100000, committed=1000)
+        session.query(PurchaseOrder).filter(
+            (PurchaseOrder.po_id == "PO-S2-001")
+            | (PurchaseOrder.parent_po_id == "PO-S2-001")
+        ).delete(synchronize_session=False)
+        rice_offers = {
+            SUP_A: (100, 2, 500, 50, 700),
+            SUP_B: (150, 1, 100, 50, 700),
+            SUP_E: (80, 8, 10, 50, 200),
+        }
+        for supplier_id, terms in rice_offers.items():
+            offering = session.query(SupplierProduct).filter_by(
+                supplier_id=supplier_id, sku=RICE
+            ).one()
+            (
+                offering.unit_price,
+                offering.lead_time_days,
+                offering.min_order_qty,
+                offering.order_multiple,
+                offering.capacity,
+            ) = terms
+            offering.available = True
 
     if key == "s1:default" or key == "s1:appropriate":
         _set_inv(session, MILK, NORTH, on_hand=0, reserved=0)
@@ -310,43 +316,35 @@ def apply_fixture(session: Session, scenario_id: str, fixture_key: str) -> None:
 
     elif key == "s2:default" or key == "s2:alt_supplier":
         _set_inv(session, RICE, NORTH, on_hand=40, reserved=10)
-        _set_forecast(session, RICE, NORTH, daily=50, qty=700, ts=now)
-        _set_budget(session, NORTH, "grocery", remaining=7000, committed=1000)
-        _set_po(session, "PO-S2-001", ordered=500, received=0, status="open", confirmed_incoming=True)
+        _set_forecast(session, RICE, NORTH, daily=30, qty=300, ts=now)
+        _set_budget(session, NORTH, "grocery", remaining=100000, committed=1000)
+        if key == "s2:alt_supplier":
+            alternate = session.query(SupplierProduct).filter_by(supplier_id=SUP_E, sku=RICE).one()
+            alternate.capacity = 700
 
     elif key == "s2:inventory_covers":
         _set_inv(session, RICE, NORTH, on_hand=900, reserved=10)
         _set_forecast(session, RICE, NORTH, daily=50, qty=700, ts=now)
-        _set_budget(session, NORTH, "grocery", remaining=7000, committed=1000)
+        _set_budget(session, NORTH, "grocery", remaining=100000, committed=1000)
 
     elif key == "s2:alt_expensive":
         _set_inv(session, RICE, NORTH, on_hand=40, reserved=10)
-        _set_budget(session, NORTH, "grocery", remaining=7000, committed=1000)
+        _set_budget(session, NORTH, "grocery", remaining=100000, committed=1000)
         alt = session.query(SupplierProduct).filter_by(supplier_id=SUP_E, sku=RICE).one()
-        alt.unit_price = 12.50
+        alt.unit_price = 125
         alt.lead_time_days = 10
 
     elif key == "s2:no_supplier":
         _set_inv(session, RICE, NORTH, on_hand=40, reserved=10)
-        alt = session.query(SupplierProduct).filter_by(supplier_id=SUP_E, sku=RICE).one()
-        alt.available = False
-        alt.capacity = 0
+        for offering in session.query(SupplierProduct).filter_by(sku=RICE).all():
+            offering.available = False
+            offering.capacity = 0
 
     elif key == "s2:stockout_escalate":
         _set_inv(session, RICE, NORTH, on_hand=10, reserved=5)
         _set_forecast(session, RICE, NORTH, daily=80, qty=1120, ts=now)
         alt = session.query(SupplierProduct).filter_by(supplier_id=SUP_E, sku=RICE).one()
         alt.available = False
-
-    elif key == "s2:partially_received":
-        _set_po(session, "PO-S2-001", ordered=500, received=200, status="partially_received", confirmed_incoming=True)
-
-    elif key == "s2:cancelled":
-        _set_po(session, "PO-S2-001", ordered=500, received=0, status="cancelled", confirmed_incoming=False)
-
-    elif key == "s2:repeat_notification":
-        _set_inv(session, RICE, NORTH, on_hand=40, reserved=10)
-        _set_po(session, "PO-S2-001", ordered=500, received=0, status="open", confirmed_incoming=True)
 
     elif key == "s3:default" or key == "s3:increase_justified":
         _set_inv(session, BREAD, NORTH, on_hand=60, reserved=20)

@@ -134,14 +134,12 @@ $$\text{Rounded Quantity} = \max\left(\text{MOQ}, \left\lceil \frac{\text{Raw Re
   - If forecast is missing or contradictory: Halts execution and transitions to `INVESTIGATE`.
   - If budget or storage is insufficient: Downsizes quantity or escalates.
 
-### Scenario 2 — Supplier Shortage (SKU: RICE-5KG, PO-S2-001)
-- **Baseline**: Ordered 500 units; supplier confirms only 250 units.
+### Scenario 2 — Rice Supplier Recommendation (SKU: RICE-5KG)
+- **Baseline**: Inventory position 30; target stock is 300 units over the next 10 days; no incoming purchase orders.
 - **Agent Behavior**:
-  - Updates confirmation status on original PO (`ordered_qty = 250`).
-  - Evaluates remaining need (250 units).
-  - Checks if current stock covers demand until next cycle; if yes, modifies order with no extra purchase.
-  - If stockout risk exists: Evaluates alternate suppliers (`SUP-ALTSOURCE`). Creates split PO linked via `parent_po_id = PO-S2-001`.
-  - Idempotency ensures repeat shortage notifications do not issue duplicate supplementary POs.
+  - Calculates a net requirement of 270 units.
+  - Evaluates each supplier against MOQ, order multiple, capacity, budget, and storage.
+  - Recommends the lowest-cost feasible supplier and explicitly reports the supplier name, order quantity, total cost, and lead time.
 
 ### Scenario 3 — Demand Change (SKU: BREAD-WHT)
 - **Baseline**: Actual sales spike from 50 units/day to sustained 93 units/day.

@@ -14,14 +14,14 @@ from app.agents.investigation import investigate
 from app.agents.langchain_agent import get_purchasing_agent
 from app.agents.planner import plan
 from app.agents.validator import validate_action
-from app.models.entities import ActionRecord, AgentRun, HumanApproval
+from app.config import get_settings
+from app.models.entities import ActionRecord, AgentRun, HumanApproval, Product
 from app.schemas.domain import AgentRunResult, DecisionRecord, InvestigationReport
 from app.seed.demo_data import SCENARIO_EVENTS, apply_fixture, seed_database
 from app.services.approval_service import ApprovalService
 from app.tools.registry import ProcurementTools
 from app.utils.ids import new_id, utcnow
 from app.utils.logging import log_event
-from app.database import reset_db
 
 logger = logging.getLogger(__name__)
 
@@ -34,8 +34,8 @@ class PurchasingAgent:
         self.decision_agent = get_purchasing_agent()
 
     def reset_fixture(self, scenario_id: str, fixture_key: str = "default") -> None:
-        reset_db()
-        seed_database(self.session, scenario_id=None, fixture_key="default")
+        if self.session.query(Product).count() == 0:
+            seed_database(self.session)
         apply_fixture(self.session, scenario_id, fixture_key)
         self.session.commit()
 
@@ -79,11 +79,22 @@ class PurchasingAgent:
                 decision = self.decision_agent.decide(self.tools, inv, baseline)
                 mode = "langchain-agent"
             except Exception as exc:
+                settings = get_settings()
+                error_detail = str(exc)
+                if settings.llm_api_key:
+                    error_detail = error_detail.replace(settings.llm_api_key, "[redacted]")
+                error_detail = error_detail[:500]
+                provider = self.decision_agent.provider
                 log_event(
                     logger,
                     "langchain_decision_fallback",
-                    error=str(exc),
-                    provider=self.decision_agent.provider,
+                    error=error_detail,
+                    error_type=type(exc).__name__,
+                    provider=provider,
+                )
+                decision.explanation = (
+                    f"{decision.explanation} The configured {provider} request failed "
+                    f"({type(exc).__name__}: {error_detail}); using the deterministic fallback."
                 )
                 decision.reasoning_mode = "deterministic-fallback"
                 mode = "deterministic-fallback"

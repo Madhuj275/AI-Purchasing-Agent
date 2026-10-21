@@ -15,7 +15,7 @@ The automated test suite comprises 8 specialized test modules located in `tests/
 | Module | Focus Area | Tests Executed | Primary Invariants Verified |
 |---|---|---|---|
 | `test_scenario_1.py` | S1: Recommendation Review | 10 tests | Independent quantity recalculation, excessive order reduction, incoming coverage rejection, budget/storage bounds, MOQ conflicts. |
-| `test_scenario_2.py` | S2: Supplier Shortages | 8 tests | Confirmation persistence, remaining need recalculation, alternative supplier order splitting, idempotency, cancelled PO immutability. |
+| `test_scenario_2.py` | S2: Rice Supplier Recommendation | 9 tests | Forecast gap calculation, best feasible supplier ranking, constraints and readable recommendation, execution, idempotency. |
 | `test_scenario_3.py` | S3: Demand Surge & Changes | 7 tests | Sustained spike vs noise detection, stale forecast handling, lead time mismatch escalation, dark store transfer evaluation. |
 | `test_scenario_4.py` | S4: Purchasing Constraints | 7 tests | Strict non-bypass of hard constraints, budget limits, storage saturation, supplier capacity limits, alternative supplier fallback. |
 | `test_constraints.py` | Replenishment Math & Rules | 6 tests | Inventory position formulas, safety stock days, supplier rounding without silent overbuy, fail-closed constraints. |
@@ -36,11 +36,11 @@ The automated test suite comprises 8 specialized test modules located in `tests/
 - **Missing or Contradictory Forecast**: Forecast timestamp omitted or reserved > on-hand. Agent refuses to invent daily demand and transitions directly to `INVESTIGATE`. Outcome: `INVESTIGATE`.
 - **Cancelled PO Exclusion**: Cancelled POs in the system are verified to contribute 0 to incoming stock. Outcome: `SUCCESS`.
 
-### Scenario 2 — Supplier Shortage (SKU: RICE-5KG, PO-S2-001)
-- **Confirmation Handling**: Supplier confirms 250 out of 500 ordered units. Agent persists confirmation on `PO-S2-001`.
-- **Shortage Mitigation via Alternative Supplier**: Agent evaluates alternative `SUP-ALTSOURCE`. Creates supplementary PO for remaining 250 units linked by `parent_po_id = PO-S2-001`. Outcome: `PARTIAL_SUCCESS`.
-- **Shortage Covered by Stock**: When warehouse on-hand suffices for lead time, agent reduces PO to 250 with no supplementary order. Outcome: `SUCCESS`.
-- **Idempotency Guarantee**: Submitting identical supplier shortage notifications multiple times produces zero duplicate POs. Unique idempotency key `idk-split-PO-S2-001-250-...` prevents double ordering.
+### Scenario 2 — Rice Supplier Recommendation (SKU: RICE-5KG)
+- **Demand**: Forecast target is 300 units over 10 days; inventory position is 30, with no incoming supply or safety stock.
+- **Net requirement**: 270 units before MOQ and order-multiple rounding.
+- **Supplier selection**: GrainWay is recommended for 300 units at $45,000 with a one-day lead time. FreshCo's MOQ rounds the order to 500 units at $50,000. AltSource's rounded 300-unit order exceeds its 200-unit capacity.
+- **Visible result**: The deterministic plan explicitly names the best supplier and reports order quantity, unit price, total cost, lead time, and rejected supplier constraints.
 
 ### Scenario 3 — Demand / Forecast Surge (SKU: BREAD-WHT)
 - **Sustained Trend Verification**: Daily sales jump from 50 to 93 units across multiple reporting periods. Agent validates that the spike is material (>25%) and sustained, proposing an increased replenishment order.
